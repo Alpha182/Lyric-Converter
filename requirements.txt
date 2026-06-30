@@ -1,0 +1,12 @@
+Flask>=3.0
+
+# Forced alignment + vocal separation. Install a build that matches your GPU/CUDA
+# from https://pytorch.org/get-started/locally/ (a CUDA build is strongly recommended;
+# CPU works but is much slower). torchaudio must match the torch version.
+torch
+torchaudio
+
+# System dependency (NOT pip): ffmpeg + ffprobe must be on your PATH.
+#   Windows:  winget install Gyan.FFmpeg     (or scoop/choco)
+#   macOS:    brew install ffmpeg
+#   Linux:    sudo apt install ffmpeg

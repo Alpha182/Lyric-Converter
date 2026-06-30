@@ -1,0 +1,19 @@
+# generated output + uploads (audio is copyrighted; files are large)
+out/
+uploads/
+logs/
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# audio / temp
+*.wav
+*.mp3
+
+# editor / tooling
+.playwright-mcp/
+.vscode/
+.idea/

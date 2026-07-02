@@ -523,10 +523,23 @@ def align_stage(vocals_path, lyrics_path, out, meta, device, lead=0.12):
             W = (nxtA - 0.06) if nxtA is not None else None
             first = word_times[mids[0]][0]
             last = max(word_times[i][1] for i in idxs)
-            gaps = [word_times[mids[j + 1]][0] - word_times[mids[j]][1] for j in range(len(mids) - 1)]
-            maxgap = max(gaps) if gaps else 0.0
+            # A big internal gap only means "MMS drifted" if it isn't a sustained held note
+            # (energy, no re-attacks): held notes legitimately leave a long gap and must NOT
+            # trigger an even re-lay, or the words after the note get spread far too early
+            # (that was throwing "…ooohh, I'm blinded by the lights" ~2s early every chorus).
+            drift_gap = 0.0
+            for j in range(len(mids) - 1):
+                ce2, ns2 = word_times[mids[j]][1], word_times[mids[j + 1]][0]
+                if ns2 - ce2 <= 1.2:
+                    continue
+                ons_in = sum(1 for o in onsets if ce2 + 0.05 < o < ns2 - 0.05)
+                if not (active_frac(ce2, ns2) > 0.6 and ons_in < 2):   # not a held note -> real drift
+                    drift_gap = max(drift_gap, ns2 - ce2)
             avail = (W - A) if W is not None else None
-            if maxgap > 2.0 or (avail is not None and (last - first) > avail * 1.6):
+            # Only a HUGE internal gap (10-20s: the fast-outro drift) or a line overspilling its
+            # window counts as MMS drift. A 2-3s gap is almost always a held note ("oooh") and
+            # must be kept — re-laying it spreads the following words early (whole choruses).
+            if drift_gap > 5.0 or (avail is not None and (last - first) > avail * 1.6):
                 end = A + sum(natural(idxs)) * 1.6        # MMS drift -> even, readable-paced layout
                 if W is not None:
                     end = min(end, W)
@@ -543,16 +556,28 @@ def align_stage(vocals_path, lyrics_path, out, meta, device, lead=0.12):
                     for i in idxs:
                         a, b = word_times[i]
                         word_times[i] = (s0 + (a - s0) * sc, s0 + (b - s0) * sc)
-                # close "fake" internal gaps: MMS sometimes over-holds a word while the voice
-                # keeps singing — if the stem is active across a big gap, pull the rest of the
-                # line earlier so the next word lands on the vocal instead of hanging lit.
+                # Internal-gap handling. MMS leaves two kinds of big gap, told apart by length:
+                #  - SHORT (~0.5-1.8s): it over-held a word while the voice ARTICULATED the next
+                #    words — pull the rest of the line earlier onto the vocal (FEAR "Knocking…at").
+                #  - LONG (>1.8s of continuous energy): it labelled a HELD note ("oooh") at the
+                #    END of the sustain — light that one word at the START of the sustain and let
+                #    it hold, WITHOUT dragging the words after it (they're already right). Pulling
+                #    across a held note was throwing whole choruses ~2s early.
                 for j in range(len(mids) - 1):
                     ce, ns = word_times[mids[j]][1], word_times[mids[j + 1]][0]
-                    if ns - ce > 0.5 and active_frac(ce, ns) > 0.5:
-                        sh = (ns - ce) - 0.5
+                    gap = ns - ce
+                    if gap <= 0.5:
+                        continue
+                    if gap <= 1.8 and active_frac(ce, ns) > 0.5 and \
+                            sum(1 for o in onsets if ce + 0.05 < o < ns - 0.05) >= 2:
+                        sh = gap - 0.5
                         for jj in range(j + 1, len(mids)):
                             a, b = word_times[mids[jj]]
                             word_times[mids[jj]] = (a - sh, b - sh)
+                    elif gap > 1.8 and active_frac(ce, ns) > 0.4:
+                        a, b = word_times[mids[j + 1]]
+                        na = ce + 0.15
+                        word_times[mids[j + 1]] = (na, max(b, na + 0.2))
                 sane += 1
         log(f"[align] placed {len(lids)} line(s): {sane} kept MMS spacing, "
             f"{len(lids) - sane} re-laid (MMS drift)")

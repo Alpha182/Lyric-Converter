@@ -24,6 +24,19 @@ import argparse, os, re, sys, json, time, subprocess, shutil, urllib.request, ur
 HERE = os.path.dirname(os.path.abspath(__file__))
 PY = sys.executable
 
+def run_retry(cmd, label, tries=3):
+    """Run a pipeline stage, retrying on failure. The heavy stages (Demucs/MMS) can hit
+    transient CUDA errors or momentary low commit-memory and die; a fresh process a few
+    seconds later almost always succeeds, so retry before giving up with a clear message."""
+    for k in range(tries):
+        if subprocess.run(cmd).returncode == 0:
+            return
+        if k < tries - 1:
+            print(f"      {label} failed (attempt {k + 1}/{tries}); retrying in 4s…", file=sys.stderr)
+            time.sleep(4)
+    sys.exit(f"{label} failed after {tries} tries — usually low GPU/commit memory. "
+             f"Close some apps (Discord/browser) or enlarge the Windows pagefile, then retry.")
+
 def slug(s):
     return re.sub(r"[^a-zA-Z0-9]+", "-", s).strip("-").lower() or "song"
 
@@ -137,14 +150,14 @@ def main():
     voc_path = os.path.join(a.outdir, name + ".vocals.wav")
     print("[2/4] separating vocals (GPU)…")
     t = time.time()
-    subprocess.run([PY, os.path.join(HERE, "align_lyrics.py"), "--stage", "separate",
-                    "--audio", a.audio, "--vocals", voc_path], check=True)
+    run_retry([PY, os.path.join(HERE, "align_lyrics.py"), "--stage", "separate",
+               "--audio", a.audio, "--vocals", voc_path], "separation")
     sep_s = time.time() - t
     print(f"      separation: {sep_s:.0f}s — aligning words (GPU)…")
     t = time.time()
-    subprocess.run([PY, os.path.join(HERE, "align_lyrics.py"), "--stage", "align",
-                    "--vocals", voc_path, "--lyrics", lyr_path, "--out", ttml_path,
-                    "--spotify-id", a.id, "--title", title, "--artist", artist], check=True)
+    run_retry([PY, os.path.join(HERE, "align_lyrics.py"), "--stage", "align",
+               "--vocals", voc_path, "--lyrics", lyr_path, "--out", ttml_path,
+               "--spotify-id", a.id, "--title", title, "--artist", artist], "alignment")
     ali_s = time.time() - t
     gen_s = sep_s + ali_s
     try: os.remove(voc_path)

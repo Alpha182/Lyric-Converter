@@ -65,9 +65,9 @@ TEMPLATE = r"""<!doctype html>
     font-size:18px;cursor:pointer;flex:none;}
   #seek{flex:1;accent-color:var(--accent);height:4px;cursor:pointer;}
   .t{font-variant-numeric:tabular-nums;font-size:12px;color:#9aa3a0;min-width:42px;text-align:center;}
-  #mode{flex:none;border:1px solid #ffffff30;background:transparent;color:#cfd6d3;border-radius:999px;
-    padding:6px 13px;font-size:12px;cursor:pointer;white-space:nowrap;}
-  #mode:hover{border-color:var(--accent);color:#fff;}
+  #mode,#nudge{flex:none;border:1px solid #ffffff30;background:transparent;color:#cfd6d3;border-radius:999px;
+    padding:6px 13px;font-size:12px;cursor:pointer;white-space:nowrap;font-variant-numeric:tabular-nums;}
+  #mode:hover,#nudge:hover{border-color:var(--accent);color:#fff;}
   .hint{position:fixed;bottom:70px;left:0;right:0;text-align:center;font-size:12px;color:#6b736f;
     z-index:10;pointer-events:none;}
 </style></head>
@@ -78,12 +78,13 @@ TEMPLATE = r"""<!doctype html>
     <span class="tag">AI auto-aligned</span>
   </div>
   <div id="stage"><div id="lyrics"></div></div>
-  <div class="hint">click any line to jump · spacebar = play/pause · green = background vocals · toggle Sweep/Pop ▸</div>
+  <div class="hint">click any line to jump · spacebar = play/pause · ← / → nudge sync · green = background vocals · Sweep/Pop ▸</div>
   <div id="bar">
     <button id="play">▶</button>
     <span class="t" id="cur">0:00</span>
     <input id="seek" type="range" min="0" max="100" value="0" step="0.01">
     <span class="t" id="dur">0:00</span>
+    <button id="nudge" title="Shift all lyric timing to match the audio (← / → keys, or click to reset)">sync 0ms</button>
     <button id="mode" title="Sweep = smooth fill across each word · Pop = crisp highlight at each word's onset">Sweep</button>
   </div>
   <audio id="audio" src="__AUDIO__" preload="auto"></audio>
@@ -96,10 +97,30 @@ const audio=document.getElementById('audio'), wrap=document.getElementById('lyri
 const fmt=s=>{s=Math.max(0,s|0);return (s/60|0)+':'+String(s%60).padStart(2,'0');};
 const allWords=ln=>ln.bg&&ln.bg.length?ln.words.concat(ln.bg):ln.words;
 const POP=0.10; // pop-fill duration (s)
+// Sweep fill: a word fills over the SHORTER of its own sung length and the time until the
+// next word starts, then holds. So a short word before a long gap (e.g. a held "to…") fills
+// crisply and waits — instead of crawling — while fast words still hand off seamlessly. A
+// tiny floor stops crammed words strobing; the cap stops a held note crawling.
+const SWEEP_MIN=0.05, SWEEP_MAX=0.75;
+function computeFill(arr){for(let i=0;i<arr.length;i++){
+  const nxt=i+1<arr.length?arr[i+1].t0:arr[i].t1;
+  const cands=[arr[i].t1-arr[i].t0, nxt-arr[i].t0].filter(x=>x>0.001);
+  const d=cands.length?Math.min(...cands):SWEEP_MIN;
+  arr[i].fill=Math.min(SWEEP_MAX,Math.max(SWEEP_MIN,d));}}
+DATA.lines.forEach(ln=>{computeFill(ln.words); if(ln.bg&&ln.bg.length)computeFill(ln.bg);});
 let mode=localStorage.getItem('lyrmode')||'sweep';
 modeBtn.textContent = mode==='pop'?'Pop':'Sweep';
 modeBtn.addEventListener('click',()=>{mode=mode==='sweep'?'pop':'sweep';
   localStorage.setItem('lyrmode',mode); modeBtn.textContent=mode==='pop'?'Pop':'Sweep';});
+
+// Live sync offset (seconds): positive = lyrics lead the audio (fixes a "starts late" feel).
+const nudgeBtn=document.getElementById('nudge');
+let OFFSET=parseFloat(localStorage.getItem('lyroffset')||'0')||0;
+const showOffset=()=>{const ms=Math.round(OFFSET*1000);nudgeBtn.textContent='sync '+(ms>0?'+':'')+ms+'ms';};
+const setOffset=v=>{OFFSET=Math.max(-2,Math.min(2,Math.round(v*100)/100));
+  localStorage.setItem('lyroffset',OFFSET);showOffset();};
+showOffset();
+nudgeBtn.addEventListener('click',()=>setOffset(0));   // click to reset
 
 const lineEls=[];
 function mkWord(wd){const sp=document.createElement('span');sp.className='word';sp.textContent=wd.w;
@@ -129,12 +150,12 @@ function setLineStates(idx){
   wrap.style.transform=`translateY(${stage.clientHeight/2-target}px)`;
 }
 function tick(){
-  const t=audio.currentTime, idx=findActive(t);
+  const t=audio.currentTime+OFFSET, idx=findActive(t);
   if(idx!==activeIdx){activeIdx=idx;setLineStates(idx);}
   if(idx>=0)for(const wd of allWords(DATA.lines[idx])){
     let p = mode==='pop'
       ? (t<wd.t0?0:Math.min(1,(t-wd.t0)/POP)*100)         // crisp: fill fast at onset, then hold
-      : (t>=wd.t1?100:t<wd.t0?0:(t-wd.t0)/(wd.t1-wd.t0)*100); // smooth sweep across the word
+      : (t<wd.t0?0:Math.min(1,(t-wd.t0)/wd.fill)*100);    // smooth sweep at the sung cadence, then hold
     wd.el.style.setProperty('--p',p.toFixed(1)+'%');}
   curT.textContent=fmt(t);
   if(audio.duration)seek.value=(t/audio.duration*100);
@@ -145,7 +166,11 @@ playBtn.addEventListener('click',()=>audio.paused?audio.play():audio.pause());
 audio.addEventListener('play',()=>playBtn.textContent='⏸');
 audio.addEventListener('pause',()=>playBtn.textContent='▶');
 seek.addEventListener('input',()=>{if(audio.duration)audio.currentTime=seek.value/100*audio.duration;});
-document.addEventListener('keydown',e=>{if(e.code==='Space'){e.preventDefault();playBtn.click();}});
+document.addEventListener('keydown',e=>{
+  if(e.code==='Space'){e.preventDefault();playBtn.click();}
+  else if(e.code==='ArrowRight'){e.preventDefault();setOffset(OFFSET+0.05);}  // lyrics earlier
+  else if(e.code==='ArrowLeft'){e.preventDefault();setOffset(OFFSET-0.05);}   // lyrics later
+});
 window.__tick=tick;
 requestAnimationFrame(tick);
 </script></body></html>"""

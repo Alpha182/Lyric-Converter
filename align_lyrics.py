@@ -230,6 +230,63 @@ def fill_unaligned(word_times, items):
     return word_times
 
 
+# -------------------------------------------------- vocal-onset utilities (A + B)
+def rms_envelope(voc16, hop=320):
+    """RMS energy of the 16k mono vocal stem at ~50 fps -> (tensor, hop_seconds)."""
+    v = voc16[0].abs()
+    nf = v.numel() // hop
+    if nf == 0:
+        return torch.zeros(0), hop / 16000.0
+    return v[:nf * hop].reshape(nf, hop).pow(2).mean(1).sqrt(), hop / 16000.0
+
+
+def onset_times(rms, hop_s, rel=0.12):
+    """Candidate vocal onsets: local peaks of positive energy rise above a relative floor.
+    A cheap stand-in for spectral-flux onset detection — enough to pin word starts to where
+    the voice actually re-enters, which is what bounds fast-verse drift."""
+    if rms.numel() < 3:
+        return []
+    peak = rms.max().item() or 1.0
+    rise = (rms[1:] - rms[:-1]).clamp(min=0)
+    out = []
+    for i in range(1, rise.numel() - 1):
+        if rms[i + 1] > rel * peak and rise[i] >= rise[i - 1] and rise[i] > rise[i + 1] and rise[i] > 0.03 * peak:
+            out.append((i + 1) * hop_s)
+    return out
+
+
+def nearest_within(sorted_ts, t, lo, hi):
+    """Nearest value in sorted_ts lying in [t+lo, t+hi], else None."""
+    best, bd = None, 1e9
+    for x in sorted_ts:
+        if x < t + lo:
+            continue
+        if x > t + hi:
+            break
+        d = abs(x - t)
+        if d < bd:
+            best, bd = x, d
+    return best
+
+
+def no_overlap(word_times, items, min_dur=0.03):
+    """Final safety: within each line's lead/background stream, clamp each word's END so it
+    never runs past the next word's onset (kills the two-words-lit overlap). Onsets are left
+    exactly where alignment/anchoring/snapping put them — no spreading, so nothing drifts."""
+    streams = {}
+    for i, it in enumerate(items):
+        if word_times[i] is not None:
+            streams.setdefault((it[0], it[3]), []).append(i)
+    for idxs in streams.values():
+        for a, b in zip(idxs, idxs[1:]):
+            sa, ea = word_times[a]
+            sb = word_times[b][0]
+            word_times[a] = (sa, max(min(ea, sb), min(sa + min_dur, sb)))
+        sa, ea = word_times[idxs[-1]]
+        word_times[idxs[-1]] = (sa, max(ea, sa + min_dur))
+    return word_times
+
+
 # --------------------------------------------------------------- ttml emit
 def fmt(t):
     t = max(0.0, t)
@@ -320,7 +377,7 @@ def separate_stage(audio, vocals_out, device):
     except OSError: pass
 
 
-def align_stage(vocals_path, lyrics_path, out, meta, device):
+def align_stage(vocals_path, lyrics_path, out, meta, device, lead=0.12):
     """Forced-align lyrics to a 16k vocal wav and write TTML."""
     lines, anchors = load_lines(open(lyrics_path, encoding="utf-8").read())
     flat, items = tokenize(lines)
@@ -407,90 +464,163 @@ def align_stage(vocals_path, lyrics_path, out, meta, device):
             line_main.setdefault(it[0], []).append(i)
     lids = sorted(line_main)
 
+    rms, hop_s = rms_envelope(voc16)
+    onsets = onset_times(rms, hop_s)
+    peak = rms.max().item() if rms.numel() else 0.0
+
     if anchors:
-        # Anchor each line's start to its human LRC timestamp (keeping the MMS word
-        # spacing within the line, scaled to fit before the next line). Human line
-        # timing means lines never land in instrumental gaps — kills the "falses".
-        anc = 0
+        # (B) Global sync — LRC line stamps are often systematically a bit late/early vs the
+        # actual vocal. Measure (nearest vocal onset − anchor) per line and shift EVERY anchor
+        # by the median, so the whole song locks onto the singing instead of the tab's bias.
+        devs = []
+        for li in lids:
+            A = anchors.get(li)
+            if A is not None:
+                o = nearest_within(onsets, A, -0.40, 0.40)
+                if o is not None:
+                    devs.append(o - A)
+        gshift = 0.0
+        if len(devs) >= 4:
+            devs.sort()
+            gshift = max(-0.35, min(0.35, devs[len(devs) // 2]))
+            anchors = {li: A + gshift for li, A in anchors.items()}
+        if abs(gshift) > 0.02:
+            log(f"[align] global sync {gshift * 1000:+.0f}ms (median LRC->vocal of {len(devs)} lines)")
+
+        # (A) Place each line against its human LRC stamp. When MMS looks sane for the line
+        # (words in order, no implausible internal gap, fits the window) keep its relative
+        # spacing — the accurate case. When MMS has fallen apart (fast outro: words 10-20s
+        # apart, lines crossing over each other, the last word flung to the song's end) its
+        # spacing is garbage, so lay the words out evenly across the line's window instead —
+        # not perfectly synced, but readable and in order. Guardrails, not blind trust. The
+        # residual aligner lateness is taken out afterwards by a single global LEAD.
+        audio_dur = voc16.size(1) / 16000.0
+
+        def natural(idxs):                                # rough sung length per word, by letters
+            return [0.14 + 0.05 * (len(items[i][2]) or len(items[i][1]) or 1) for i in idxs]
+
+        def even_layout(idxs, start, end):
+            durs = natural(idxs); sc = max(0.1, end - start) / (sum(durs) or 1.0)
+            t = start
+            for i, d in zip(idxs, durs):
+                w = d * sc
+                word_times[i] = (t, t + w * 0.85)         # 15% gap between words
+                t += w
+
+        def active_frac(a, b):                            # fraction of [a,b] carrying vocal energy
+            if rms.numel() == 0 or b <= a:
+                return 0.0
+            i0, i1 = max(0, int(a / hop_s)), min(rms.numel(), int(b / hop_s))
+            return float((rms[i0:i1] > 0.12 * (peak or 1.0)).float().mean()) if i1 > i0 else 0.0
+
+        sane = 0
         for k, li in enumerate(lids):
             A = anchors.get(li)
             if A is None:
                 continue
-            idxs = line_all[li]
-            cur = word_times[line_main[li][0]][0]
-            span = max(0.05, max(word_times[i][1] for i in idxs) - cur)
+            idxs, mids = line_all[li], line_main[li]
             nxtA = next((anchors[j] for j in lids[k + 1:] if j in anchors), None)
-            scale = 1.0
-            if nxtA is not None and A + span > nxtA - 0.05:
-                scale = max(0.0, nxtA - 0.05 - A) / span
-            for i in idxs:
-                a, b = word_times[i]
-                word_times[i] = (A + (a - cur) * scale, A + (b - cur) * scale)
-            anc += 1
-        log(f"[align] anchored {anc} line(s) to LRCLIB synced timing")
-
-        # Safety net: if the reference put line 1 in the intro (before any singing),
-        # push the whole first line to the first sustained vocal onset in the stem.
-        if lids:
-            v = voc16[0].abs(); nf = v.numel() // 320
-            if nf:
-                rms = v[:nf * 320].reshape(nf, 320).pow(2).mean(1).sqrt()
-                act = (rms > 0.12 * (rms.max().item() or 1.0)).tolist()
-                g, i = None, 0
-                while i < nf - 8:
-                    if all(act[i:i + 8]):           # 160ms of continuous voice
-                        g = i * 0.02; break
-                    i += 1
-                idxs = line_all[lids[0]]
-                s0 = word_times[line_main[lids[0]][0]][0]
-                if g is not None and g > s0 + 0.5:
-                    d = g - s0
-                    for j in idxs:
-                        a, b = word_times[j]
-                        word_times[j] = (a + d, b + d)
-                    log(f"[align] pushed line 1 to first vocal onset (+{d:.1f}s)")
-    else:
-        # No synced timing available — fall back to snapping lines that start in
-        # silence onto the next vocal onset (less reliable; uses the stem's energy).
-        HOP = 0.02
-        v = voc16[0].abs()
-        nf = v.numel() // 320
-        if nf:
-            rms = v[:nf * 320].reshape(nf, 320).pow(2).mean(1).sqrt()
-            thr = 0.12 * (rms.max().item() or 1.0)
-            act = (rms > thr).tolist()
-            is_active = lambda t: 0 <= int(t / HOP) < nf and act[int(t / HOP)]
-
-            def next_onset(t):
-                i = max(0, int(t / HOP))
-                while i < nf - 2:
-                    if act[i] and act[i + 1] and act[i + 2]:
-                        return i * HOP
-                    i += 1
-                return None
-
-            moved = 0
-            for k, li in enumerate(lids):
-                idxs = line_all[li]
-                s = word_times[line_main[li][0]][0]
-                e = max(word_times[i][1] for i in idxs)
-                if is_active(s):
-                    continue
-                o = next_onset(s)
-                if o is None or o <= s + 0.15:
-                    continue
-                if k + 1 < len(lids):
-                    ns = word_times[line_main[lids[k + 1]][0]][0]
-                    bound = max(ns, next_onset(ns) or ns)
-                else:
-                    bound = e + 999
-                delta = min(o - s, max(0.0, bound - e - 0.05))
-                if delta > 0.15:
+            W = (nxtA - 0.06) if nxtA is not None else None
+            first = word_times[mids[0]][0]
+            last = max(word_times[i][1] for i in idxs)
+            gaps = [word_times[mids[j + 1]][0] - word_times[mids[j]][1] for j in range(len(mids) - 1)]
+            maxgap = max(gaps) if gaps else 0.0
+            avail = (W - A) if W is not None else None
+            if maxgap > 2.0 or (avail is not None and (last - first) > avail * 1.6):
+                end = A + sum(natural(idxs)) * 1.6        # MMS drift -> even, readable-paced layout
+                if W is not None:
+                    end = min(end, W)
+                even_layout(idxs, A, max(A + 0.2, min(end, audio_dur)))
+            else:
+                dev = A - first                           # sane -> translate so first word lands on A
+                for i in idxs:
+                    a, b = word_times[i]
+                    word_times[i] = (a + dev, b + dev)
+                if W is not None and max(word_times[i][1] for i in idxs) > W:
+                    s0 = word_times[mids[0]][0]
+                    ln = max(word_times[i][1] for i in idxs)
+                    sc = max(0.4, (W - s0) / max(0.05, ln - s0))
                     for i in idxs:
                         a, b = word_times[i]
-                        word_times[i] = (a + delta, b + delta)
-                    moved += 1
-            log(f"[align] moved {moved} line(s) off silence onto the vocal onset")
+                        word_times[i] = (s0 + (a - s0) * sc, s0 + (b - s0) * sc)
+                # close "fake" internal gaps: MMS sometimes over-holds a word while the voice
+                # keeps singing — if the stem is active across a big gap, pull the rest of the
+                # line earlier so the next word lands on the vocal instead of hanging lit.
+                for j in range(len(mids) - 1):
+                    ce, ns = word_times[mids[j]][1], word_times[mids[j + 1]][0]
+                    if ns - ce > 0.5 and active_frac(ce, ns) > 0.5:
+                        sh = (ns - ce) - 0.5
+                        for jj in range(j + 1, len(mids)):
+                            a, b = word_times[mids[jj]]
+                            word_times[mids[jj]] = (a - sh, b - sh)
+                sane += 1
+        log(f"[align] placed {len(lids)} line(s): {sane} kept MMS spacing, "
+            f"{len(lids) - sane} re-laid (MMS drift)")
+
+        # Line-1 intro guard: if the first word still sits well before the singing, slide the
+        # whole first line onto the first sustained (160 ms) vocal onset.
+        if lids and rms.numel() >= 8:
+            thr, g = 0.12 * (peak or 1.0), None
+            for i in range(rms.numel() - 8):
+                if bool((rms[i:i + 8] > thr).all()):
+                    g = i * hop_s
+                    break
+            s0 = word_times[line_main[lids[0]][0]][0]
+            if g is not None and g > s0 + 0.5:
+                d = g - s0
+                for j in line_all[lids[0]]:
+                    a, b = word_times[j]
+                    word_times[j] = (a + d, b + d)
+                log(f"[align] pushed line 1 to first vocal onset (+{d:.1f}s)")
+    else:
+        # No synced timing — snap lines that start in silence onto the next vocal onset.
+        HOP = hop_s
+        act = (rms > 0.12 * (peak or 1.0)).tolist() if rms.numel() else []
+        nf = len(act)
+        is_active = lambda t: 0 <= int(t / HOP) < nf and act[int(t / HOP)]
+
+        def next_onset(t):
+            i = max(0, int(t / HOP))
+            while i < nf - 2:
+                if act[i] and act[i + 1] and act[i + 2]:
+                    return i * HOP
+                i += 1
+            return None
+
+        moved = 0
+        for k, li in enumerate(lids):
+            idxs = line_all[li]
+            s = word_times[line_main[li][0]][0]
+            e = max(word_times[i][1] for i in idxs)
+            if is_active(s):
+                continue
+            o = next_onset(s)
+            if o is None or o <= s + 0.15:
+                continue
+            if k + 1 < len(lids):
+                ns = word_times[line_main[lids[k + 1]][0]][0]
+                bound = max(ns, next_onset(ns) or ns)
+            else:
+                bound = e + 999
+            delta = min(o - s, max(0.0, bound - e - 0.05))
+            if delta > 0.15:
+                for i in idxs:
+                    a, b = word_times[i]
+                    word_times[i] = (a + delta, b + delta)
+                moved += 1
+        log(f"[align] moved {moved} line(s) off silence onto the vocal onset")
+
+    no_overlap(word_times, items)                         # remove any word overlaps; onsets untouched
+
+    if lead:
+        # Global lead: forced aligners (and hand LRC stamps) sit a touch late — MMS lands on
+        # the vowel, past the consonant attack — so the highlight feels a beat behind, worst on
+        # fast lines. Nudge every word earlier by `lead` seconds to cancel that systematic bias.
+        for i, wt in enumerate(word_times):
+            if wt is not None:
+                ns = max(0.0, wt[0] - lead)
+                word_times[i] = (ns, ns + (wt[1] - wt[0]))
+        log(f"[align] applied global lead -{lead * 1000:.0f}ms")
 
     log(f"[align] {len(items)} words aligned ({len(bg_idx)} background) over "
         f"{max(t[1] for t in word_times):.1f}s")
@@ -512,6 +642,8 @@ def main():
     ap.add_argument("--title", default="")
     ap.add_argument("--artist", default="")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    ap.add_argument("--lead", type=float, default=0.12,
+                    help="shift all words earlier by this many seconds to cancel the aligner's late bias")
     args = ap.parse_args()
 
     device = torch.device(args.device)
@@ -522,11 +654,11 @@ def main():
     if args.stage == "separate":
         separate_stage(args.audio, args.vocals, device)
     elif args.stage == "align":
-        align_stage(args.vocals, args.lyrics, args.out, meta, device)
+        align_stage(args.vocals, args.lyrics, args.out, meta, device, args.lead)
     else:  # all-in-one process (fine for short songs)
         vpath = args.vocals or tempfile.NamedTemporaryFile(suffix=".wav", delete=False).name
         separate_stage(args.audio, vpath, device)
-        align_stage(vpath, args.lyrics, args.out, meta, device)
+        align_stage(vpath, args.lyrics, args.out, meta, device, args.lead)
 
 
 if __name__ == "__main__":

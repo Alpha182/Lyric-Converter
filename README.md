@@ -26,9 +26,15 @@ pip install -r requirements.txt
 python server.py
 ```
 
-Then open <http://127.0.0.1:8770>. Upload a song file, give it a Spotify track ID
-and/or a "song + artist" search (or paste the lyrics yourself), and it generates the
-karaoke page. Results land in `out/` (`<id>.ttml` + `<id>.html`).
+Then open <http://127.0.0.1:8770>.
+
+- **Songs** (home) — your library: cover art, title/artist, Spotify ID (click to
+  copy), length, and a personal 1–5 star rating (saved to `ratings.json`).
+  Covers and missing titles are fetched once from Spotify's public embed/oEmbed
+  endpoints and cached (`covers/`, `library.json`).
+- **Generate** — upload a song file, give it a Spotify track ID and/or a
+  "song + artist" search (or paste the lyrics yourself), and it generates the
+  karaoke page. Results land in `out/` (`<id>.ttml` + `<id>.html`).
 
 ## Command line (one song)
 

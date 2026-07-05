@@ -1,0 +1,75 @@
+{% extends "layout.html" %}
+{% block title %}Generate · Lyric Aligner{% endblock %}
+{% block content %}
+<div id="ov" hidden>
+  <div class="eq" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+  <div class="steps" id="steps">
+    <div class="step" data-at="0"><i></i>Get audio</div>
+    <div class="step" data-at="10"><i></i>Fetch lyrics</div>
+    <div class="step" data-at="16"><i></i>Separate vocals</div>
+    <div class="step" data-at="48"><i></i>Align words</div>
+    <div class="step" data-at="82"><i></i>Build karaoke page</div>
+  </div>
+  <span class="ov-sub">Runs on your GPU, usually about a minute. Keep this tab open.</span>
+  <span class="ov-time" id="elapsed">0:00</span>
+</div>
+
+<div id="logmodal" class="modal" hidden>
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="log-title">
+    <div class="modal-head">
+      <span class="modal-title" id="log-title">Generation failed</span>
+      <button type="button" class="modal-x" id="log-close" aria-label="Close">✕</button>
+    </div>
+    <p class="modal-sub">The pipeline stopped before finishing. Here's the tail of the log.</p>
+    <pre class="modal-log" id="log-body"></pre>
+    <div class="modal-foot">
+      <button type="button" class="btn ghost" id="log-dismiss">Close</button>
+    </div>
+  </div>
+</div>
+
+<header class="page-head reveal">
+  <div class="eyebrow">Tools</div>
+  <h1>Generate karaoke</h1>
+  <p class="page-sub">Paste a Spotify link and we handle the rest: download the track, find its lyrics, and align them word by word on your GPU.</p>
+</header>
+
+<section class="form-panel reveal">
+  <div class="panel-head"><span class="panel-title">New song</span></div>
+  <form id="gen" method="post" action="/generate" enctype="multipart/form-data">
+    <div class="tabs" role="tablist">
+      <button type="button" class="tab on" data-src="spotify" role="tab">From Spotify link</button>
+      <button type="button" class="tab" data-src="upload" role="tab">Upload a file</button>
+    </div>
+
+    <div class="src" data-src="spotify">
+      <label class="field-label" for="spotify">Spotify track link</label>
+      <input id="spotify" type="text" name="spotify" placeholder="https://open.spotify.com/track/…" autocomplete="off" spellcheck="false">
+      <p class="note">We download the audio, read the title and artist, and look up synced lyrics automatically. Add your own lyrics below only if the lookup misses.</p>
+    </div>
+
+    <div class="src" data-src="upload" hidden>
+      <label class="field-label" for="audio">Song audio file</label>
+      <label class="drop" id="drop">
+        <input id="audio" type="file" name="audio" accept="audio/*">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4m0 0 4 4m-4-4-4 4"/><path d="M4 17v2a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-2"/></svg>
+        <span id="drop-text"><b>Choose a song</b> or drop it here</span>
+      </label>
+      <label class="field-label" for="sid">Spotify track ID <span class="hint">optional, for cover art + the right name</span></label>
+      <input id="sid" type="text" name="id" placeholder="6wJYhPfqk3KGhHRG76WzOh" autocomplete="off" spellcheck="false">
+    </div>
+
+    <details class="more">
+      <summary>Lyrics options</summary>
+      <label class="field-label" for="search">Find lyrics <span class="hint">song + artist, if the auto lookup misses</span></label>
+      <input id="search" type="text" name="search" placeholder="Blinding Lights The Weeknd" autocomplete="off">
+      <label class="field-label" for="lyrics">Paste lyrics <span class="hint">optional, overrides the search</span></label>
+      <textarea id="lyrics" name="lyrics" placeholder="I've been tryna call&#10;I've been on my own for long enough&#10;…"></textarea>
+    </details>
+
+    <button class="btn" type="submit">Generate karaoke</button>
+  </form>
+</section>
+
+<script src="/static/generate.js"></script>
+{% endblock %}

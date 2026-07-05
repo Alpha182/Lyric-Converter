@@ -165,9 +165,11 @@ def main():
 
     # 3) build view (embeds the generation time)
     print(f"[3/4] alignment: {ali_s:.0f}s — building karaoke page…")
+    cover = f"/covers/{a.id}.jpg" if a.id else ""
     subprocess.run([PY, os.path.join(HERE, "make_view.py"),
                     "--ttml", ttml_path, "--audio", audio_local, "--out", html_path,
-                    "--title", title, "--artist", artist, "--gen-seconds", str(round(gen_s))], check=True)
+                    "--title", title, "--artist", artist, "--cover", cover,
+                    "--gen-seconds", str(round(gen_s))], check=True)
 
     # 4) open
     print(f"[4/4] done in {gen_s:.0f}s (separate {sep_s:.0f}s + align {ali_s:.0f}s) -> {html_path}")

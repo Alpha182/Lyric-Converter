@@ -3,6 +3,12 @@ out/
 uploads/
 logs/
 
+# runtime caches + personal data (regenerated on demand)
+# covers/ = album art from Spotify oEmbed; library.json = metadata cache; ratings.json = personal ratings
+covers/
+library.json
+ratings.json
+
 # python
 __pycache__/
 *.pyc

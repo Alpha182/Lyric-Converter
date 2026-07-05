@@ -377,7 +377,7 @@ def separate_stage(audio, vocals_out, device):
     except OSError: pass
 
 
-def align_stage(vocals_path, lyrics_path, out, meta, device, lead=0.12):
+def align_stage(vocals_path, lyrics_path, out, meta, device, lead=0.12, blend=0.55):
     """Forced-align lyrics to a 16k vocal wav and write TTML."""
     lines, anchors = load_lines(open(lyrics_path, encoding="utf-8").read())
     flat, items = tokenize(lines)
@@ -502,7 +502,7 @@ def align_stage(vocals_path, lyrics_path, out, meta, device, lead=0.12):
         # BLEND of the way from MMS's onset back toward the stamp (0 = pin hard to the stamp, the
         # old behaviour that dragged whole lines ~300 ms early; 1 = trust MMS as-is). Measured
         # against the hand-authored Blinding Lights reference, ~0.55 centres the error.
-        BLEND = 0.55
+        BLEND = blend
 
         def natural(idxs):                                # rough sung length per word, by letters
             return [0.14 + 0.05 * (len(items[i][2]) or len(items[i][1]) or 1) for i in idxs]
@@ -687,6 +687,8 @@ def main():
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--lead", type=float, default=0.12,
                     help="shift all words earlier by this many seconds to cancel the aligner's late bias")
+    ap.add_argument("--blend", type=float, default=0.55,
+                    help="0=pin line starts to the LRC stamp, 1=trust MMS onset as-is")
     args = ap.parse_args()
 
     device = torch.device(args.device)
@@ -698,11 +700,11 @@ def main():
     if args.stage == "separate":
         separate_stage(args.audio, args.vocals, device)
     elif args.stage == "align":
-        align_stage(args.vocals, args.lyrics, args.out, meta, device, args.lead)
+        align_stage(args.vocals, args.lyrics, args.out, meta, device, args.lead, args.blend)
     else:  # all-in-one process (fine for short songs)
         vpath = args.vocals or tempfile.NamedTemporaryFile(suffix=".wav", delete=False).name
         separate_stage(args.audio, vpath, device)
-        align_stage(vpath, args.lyrics, args.out, meta, device, args.lead)
+        align_stage(vpath, args.lyrics, args.out, meta, device, args.lead, args.blend)
 
 
 if __name__ == "__main__":

@@ -39,20 +39,36 @@ def load_json(path):
 def load(path):
     return load_json(path) if path.lower().endswith(".json") else load_ttml(path)
 
-def compare(name, cand, ref):
+STRUCT_CUT = 3.0  # |error| above this is a structural miss (matcher paired the wrong
+                  # repeat of a word, or the aligner derailed) — counted, not averaged in
+
+def score(cand, ref):
+    """Match candidate words to reference words; return timing stats + structural count."""
     sm = difflib.SequenceMatcher(a=[w for w, _ in ref], b=[w for w, _ in cand], autojunk=False)
     errs = []
     for blk in sm.get_matching_blocks():
         for k in range(blk.size):
             errs.append(cand[blk.b + k][1] - ref[blk.a + k][1])
-    if not errs:
+    timing = [e for e in errs if abs(e) <= STRUCT_CUT]
+    if not timing:
+        return None
+    ab = sorted(abs(e) for e in timing)
+    return {
+        "matched": len(errs), "ref_words": len(ref), "struct": len(errs) - len(timing),
+        "mean": sum(ab) / len(ab), "median": ab[len(ab) // 2],
+        "p90": ab[int(0.9 * (len(ab) - 1))], "max": ab[-1], "bias": st.mean(timing),
+    }
+
+def compare(name, cand, ref):
+    s = score(cand, ref)
+    if s is None:
         print(f"{name:30s}  no matches!")
         return
-    ab = sorted(abs(e) for e in errs)
-    print(f"{name:30s} matched {len(errs):3d}/{len(ref)} ({100*len(errs)/len(ref):3.0f}%)  "
-          f"mean|e| {1000*sum(ab)/len(ab):4.0f}ms  median {1000*ab[len(ab)//2]:4.0f}ms  "
-          f"p90 {1000*ab[int(0.9*(len(ab)-1))]:4.0f}ms  max {1000*ab[-1]:5.0f}ms  "
-          f"bias {1000*st.mean(errs):+5.0f}ms")
+    print(f"{name:30s} matched {s['matched']:3d}/{s['ref_words']} "
+          f"({100*s['matched']/s['ref_words']:3.0f}%)  "
+          f"mean|e| {1000*s['mean']:4.0f}ms  median {1000*s['median']:4.0f}ms  "
+          f"p90 {1000*s['p90']:4.0f}ms  max {1000*s['max']:5.0f}ms  "
+          f"bias {1000*s['bias']:+5.0f}ms  struct-miss {s['struct']}")
 
 if __name__ == "__main__":
     if len(sys.argv) < 3:

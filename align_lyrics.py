@@ -492,9 +492,17 @@ def align_stage(vocals_path, lyrics_path, out, meta, device, lead=0.12):
         # spacing — the accurate case. When MMS has fallen apart (fast outro: words 10-20s
         # apart, lines crossing over each other, the last word flung to the song's end) its
         # spacing is garbage, so lay the words out evenly across the line's window instead —
-        # not perfectly synced, but readable and in order. Guardrails, not blind trust. The
-        # residual aligner lateness is taken out afterwards by a single global LEAD.
+        # not perfectly synced, but readable and in order. Guardrails, not blind trust. Absolute
+        # placement of a sane line is set by the stamp/MMS blend below (then a small global LEAD).
         audio_dur = voc16.size(1) / 16000.0
+
+        # Where to land each sane line's first word. The human LRC stamp leads the vocal (tab
+        # authors cue the line a beat early); MMS lands late (on the vowel, past the consonant).
+        # The truth is between them, so translate the line so its first word sits a fraction
+        # BLEND of the way from MMS's onset back toward the stamp (0 = pin hard to the stamp, the
+        # old behaviour that dragged whole lines ~300 ms early; 1 = trust MMS as-is). Measured
+        # against the hand-authored Blinding Lights reference, ~0.55 centres the error.
+        BLEND = 0.55
 
         def natural(idxs):                                # rough sung length per word, by letters
             return [0.14 + 0.05 * (len(items[i][2]) or len(items[i][1]) or 1) for i in idxs]
@@ -536,16 +544,26 @@ def align_stage(vocals_path, lyrics_path, out, meta, device, lead=0.12):
                 if not (active_frac(ce2, ns2) > 0.6 and ons_in < 2):   # not a held note -> real drift
                     drift_gap = max(drift_gap, ns2 - ce2)
             avail = (W - A) if W is not None else None
-            # Only a HUGE internal gap (10-20s: the fast-outro drift) or a line overspilling its
-            # window counts as MMS drift. A 2-3s gap is almost always a held note ("oooh") and
-            # must be kept — re-laying it spreads the following words early (whole choruses).
+            # A line re-lays (words spaced evenly across its window) when MMS's spacing is
+            # untrustworthy: a catastrophic gap (10-20s fast-outro collapse) OR a line that
+            # over-spreads its window (usually overlapping background vocals fooling MMS). A held
+            # note ("oooh", a 2-3s gap of continuous energy) is NOT drift and must be kept, or the
+            # words after it spread early (whole choruses). In the over-spread case MMS's onset is
+            # corrupted, so the blend below must NOT trust it — even-relay anchors the first word to
+            # the stamp instead, which is far closer.
             if drift_gap > 5.0 or (avail is not None and (last - first) > avail * 1.6):
                 end = A + sum(natural(idxs)) * 1.6        # MMS drift -> even, readable-paced layout
                 if W is not None:
                     end = min(end, W)
                 even_layout(idxs, A, max(A + 0.2, min(end, audio_dur)))
             else:
-                dev = A - first                           # sane -> translate so first word lands on A
+                # Blend MMS's onset with the stamp, but CLAMP how far MMS is trusted to sit after
+                # the stamp. A mild lag (up to ~0.7s: MMS lands on the vowel, past the consonant)
+                # is real and worth following; a larger gap is MMS drift, not singing, and trusting
+                # it would drag the whole line seconds late (FEAR "On the verge" went +2s). Cap the
+                # trusted lag so drift lines fall back near the stamp instead.
+                lag = max(-0.5, min(0.7, first - A))
+                dev = (A + BLEND * lag) - first           # land first word at A + BLEND*lag
                 for i in idxs:
                     a, b = word_times[i]
                     word_times[i] = (a + dev, b + dev)
@@ -674,7 +692,8 @@ def main():
     device = torch.device(args.device)
     log(f"[device] {device} ({torch.cuda.get_device_name(0) if device.type=='cuda' else 'cpu'})")
     meta = [("spotifyId", args.spotify_id), ("musicName", args.title),
-            ("artists", args.artist), ("ttmlAuthorGithubLogin", "auto-aligned")]
+            ("artists", args.artist), ("ttmlAuthorGithubLogin", "auto-aligned"),
+            ("aligner", "v2-blend")]   # stamps the alignment version so viewers can label it
 
     if args.stage == "separate":
         separate_stage(args.audio, args.vocals, device)

@@ -9,7 +9,7 @@ Upload a song file + (Spotify id and/or a search term), it runs the pipeline and
 shows the karaoke viewer. Everything is served over http so the audio + clicking
 work (file:// blocks local audio).
 """
-import os, re, sys, subprocess
+import os, re, sys, html, subprocess
 from flask import Flask, request, send_from_directory, redirect
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -38,9 +38,15 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
    color:#04130a;font-size:15px;font-weight:700;cursor:pointer;}
  .or{color:#6b736f;font-size:12px;text-align:center;margin:14px 0 0;}
  .songs{margin-top:30px;} .songs h2{font-size:14px;color:#9aa3a0;font-weight:600;}
- .songs a{display:block;color:#fff;text-decoration:none;padding:9px 12px;border-radius:8px;
-   background:#0f1512;border:1px solid #ffffff10;margin-top:7px;font-size:14px;}
+ .songs a{display:flex;align-items:center;justify-content:space-between;gap:10px;color:#fff;
+   text-decoration:none;padding:9px 12px;border-radius:8px;background:#0f1512;
+   border:1px solid #ffffff10;margin-top:7px;font-size:14px;}
  .songs a:hover{border-color:var(--accent);}
+ .songs .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+ .tag{flex:none;font-size:11px;padding:2px 9px;border-radius:999px;white-space:nowrap;}
+ .tag.new{background:#1db95422;color:#1db954;border:1px solid #1db95455;}
+ .tag.sing{background:#7c5cff22;color:#a48bff;border:1px solid #7c5cff66;}
+ .tag.old{background:#ffffff10;color:#7a827e;border:1px solid #ffffff18;}
  #ov{position:fixed;inset:0;background:#070907ee;display:none;align-items:center;justify-content:center;
    flex-direction:column;text-align:center;z-index:9;}
  #ov .s{width:44px;height:44px;border:4px solid #ffffff22;border-top-color:var(--accent);border-radius:50%;
@@ -67,10 +73,37 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8">
  </div>
 </body></html>"""
 
+META = re.compile(r'key="([^"]+)" value="([^"]*)"')
+
+def song_info(base):
+    """(display name, aligner version) read from the song's .ttml, falling back to the id."""
+    tp = os.path.join(OUT, base + ".ttml")
+    name, artist, aligner = "", "", ""
+    if os.path.exists(tp):
+        d = dict(META.findall(open(tp, encoding="utf-8").read()[:2000]))
+        name = html.unescape(d.get("musicName", ""))
+        artist = html.unescape(d.get("artists", ""))
+        aligner = d.get("aligner", "")
+    label = f"{name} — {artist}" if name and artist else (name or base)
+    return label, aligner
+
 @app.route("/")
 def index():
-    songs = sorted((f for f in os.listdir(OUT) if f.endswith(".html")), key=str.lower)
-    items = "".join(f'<a href="/songs/{f}">{f[:-5]}</a>' for f in songs) or '<a style="color:#6b736f">none yet</a>'
+    songs = [f[:-5] for f in os.listdir(OUT) if f.endswith(".html")]
+    rows = [(base,) + song_info(base) for base in songs]
+    # singing-aligned first, then MMS-blend, then older; alphabetical within each
+    order = {"v3-singing": 0, "v2-blend": 1}
+    rows.sort(key=lambda r: (order.get(r[2], 2), r[1].lower()))
+    def badge(al):
+        if al == "v3-singing":
+            return "sing", "singing-aligned"
+        return ("new", "MMS blend") if al else ("old", "older")
+    parts = []
+    for base, label, aligner in rows:
+        cls, name = badge(aligner)
+        parts.append(f'<a href="/songs/{base}.html"><span class="nm">{html.escape(label)}</span>'
+                     f'<span class="tag {cls}">{name}</span></a>')
+    items = "".join(parts) or '<a style="color:#6b736f">none yet</a>'
     return PAGE.replace("__LIST__", items)
 
 @app.route("/songs/<path:fn>")

@@ -1,0 +1,71 @@
+9 songs, 40 configs -> 360 align runs
+
+blend=0.00 lead=0.00  avg-median  236ms  avg-p90  727ms  obj  600  struct 66
+blend=0.00 lead=0.06  avg-median  258ms  avg-p90  751ms  obj  633  struct 67
+blend=0.00 lead=0.12  avg-median  293ms  avg-p90  789ms  obj  688  struct 67
+blend=0.00 lead=0.18  avg-median  336ms  avg-p90  843ms  obj  758  struct 66
+blend=0.00 lead=0.25  avg-median  395ms  avg-p90  895ms  obj  842  struct 66
+blend=0.15 lead=0.00  avg-median  213ms  avg-p90  696ms  obj  561  struct 66
+blend=0.15 lead=0.06  avg-median  225ms  avg-p90  724ms  obj  587  struct 66
+blend=0.15 lead=0.12  avg-median  258ms  avg-p90  761ms  obj  639  struct 66
+blend=0.15 lead=0.18  avg-median  298ms  avg-p90  791ms  obj  694  struct 67
+blend=0.15 lead=0.25  avg-median  358ms  avg-p90  857ms  obj  786  struct 66
+blend=0.30 lead=0.00  avg-median  196ms  avg-p90  684ms  obj  538  struct 67
+blend=0.30 lead=0.06  avg-median  198ms  avg-p90  704ms  obj  550  struct 67
+blend=0.30 lead=0.12  avg-median  224ms  avg-p90  746ms  obj  597  struct 66
+blend=0.30 lead=0.18  avg-median  265ms  avg-p90  787ms  obj  659  struct 66
+blend=0.30 lead=0.25  avg-median  321ms  avg-p90  827ms  obj  735  struct 66
+blend=0.45 lead=0.00  avg-median  184ms  avg-p90  683ms  obj  526  struct 68
+blend=0.45 lead=0.06  avg-median  180ms  avg-p90  696ms  obj  528  struct 68
+blend=0.45 lead=0.12  avg-median  197ms  avg-p90  714ms  obj  554  struct 67
+blend=0.45 lead=0.18  avg-median  232ms  avg-p90  765ms  obj  614  struct 67
+blend=0.45 lead=0.25  avg-median  288ms  avg-p90  819ms  obj  698  struct 67
+blend=0.55 lead=0.00  avg-median  185ms  avg-p90  672ms  obj  521  struct 69
+blend=0.55 lead=0.06  avg-median  173ms  avg-p90  690ms  obj  518  struct 68
+blend=0.55 lead=0.12  avg-median  187ms  avg-p90  717ms  obj  546  struct 68
+blend=0.55 lead=0.18  avg-median  218ms  avg-p90  747ms  obj  592  struct 68
+blend=0.55 lead=0.25  avg-median  271ms  avg-p90  800ms  obj  671  struct 68
+blend=0.70 lead=0.00  avg-median  183ms  avg-p90  673ms  obj  519  struct 69
+blend=0.70 lead=0.06  avg-median  169ms  avg-p90  690ms  obj  514  struct 69
+blend=0.70 lead=0.12  avg-median  174ms  avg-p90  708ms  obj  527  struct 70
+blend=0.70 lead=0.18  avg-median  202ms  avg-p90  741ms  obj  573  struct 69
+blend=0.70 lead=0.25  avg-median  248ms  avg-p90  778ms  obj  637  struct 69
+blend=0.85 lead=0.00  avg-median  192ms  avg-p90  699ms  obj  541  struct 69
+blend=0.85 lead=0.06  avg-median  171ms  avg-p90  709ms  obj  525  struct 69
+blend=0.85 lead=0.12  avg-median  172ms  avg-p90  727ms  obj  535  struct 70
+blend=0.85 lead=0.18  avg-median  190ms  avg-p90  748ms  obj  564  struct 70
+blend=0.85 lead=0.25  avg-median  231ms  avg-p90  791ms  obj  626  struct 71
+blend=1.00 lead=0.00  avg-median  201ms  avg-p90  749ms  obj  575  struct 71
+blend=1.00 lead=0.06  avg-median  175ms  avg-p90  747ms  obj  549  struct 70
+blend=1.00 lead=0.12  avg-median  165ms  avg-p90  757ms  obj  543  struct 69
+blend=1.00 lead=0.18  avg-median  180ms  avg-p90  765ms  obj  562  struct 71
+blend=1.00 lead=0.25  avg-median  218ms  avg-p90  793ms  obj  615  struct 72
+
+=== top 5 configs ===
+blend=0.70 lead=0.06  obj 514  avg-median 169ms  avg-p90 690ms
+blend=0.55 lead=0.06  obj 518  avg-median 173ms  avg-p90 690ms
+blend=0.70 lead=0.00  obj 519  avg-median 183ms  avg-p90 673ms
+blend=0.55 lead=0.00  obj 521  avg-median 185ms  avg-p90 672ms
+blend=0.85 lead=0.06  obj 525  avg-median 171ms  avg-p90 709ms
+
+=== winner blend=0.70 lead=0.06 vs default blend=0.55 lead=0.12, per song ===
+0VjIjW4GlUZAMYd2vXMi3b  median  140 ->  172ms   p90  567 ->  588ms   bias  -105 ->   +12ms
+190jyVPHYjAqEaOGmMzdyk  median  144 ->  104ms   p90 1067 -> 1062ms   bias  -184 ->  -116ms
+1mea3bSkSGXuIRvnydlB5b  median  453 ->  303ms   p90  692 ->  562ms   bias  -469 ->  -334ms
+1zB4vmk8tFRmM9UULNzbLB  median   89 ->  110ms   p90  609 ->  590ms   bias   +11 ->  +112ms
+2JzZzZUQj3Qff7wapcbKjc  median   87 ->  112ms   p90  354 ->  340ms   bias   -19 ->   +50ms
+39LLxExYz6ewLAcYrzQQyP  median  357 ->  361ms   p90 1226 -> 1144ms   bias  -324 ->  -240ms
+4OSBTYWVwsQhGLF9NHvIbR  median  167 ->  200ms   p90  884 ->  881ms   bias  +109 ->  +180ms
+5QYnNhTKsN3kE7OaqILA1U  median   99 ->   74ms   p90  477 ->  469ms   bias  -146 ->   -60ms
+5vNRhkKd0yEAg8suGBpjeY  median  146 ->   86ms   p90  581 ->  576ms   bias  -243 ->  -180ms
+
+=== leave-one-out stability of winner ===
+without 0VjIjW4GlUZAMYd2vXMi3b: winner ranks #2
+without 190jyVPHYjAqEaOGmMzdyk: winner ranks #1
+without 1mea3bSkSGXuIRvnydlB5b: winner ranks #5
+without 1zB4vmk8tFRmM9UULNzbLB: winner ranks #1
+without 2JzZzZUQj3Qff7wapcbKjc: winner ranks #2
+without 39LLxExYz6ewLAcYrzQQyP: winner ranks #1
+without 4OSBTYWVwsQhGLF9NHvIbR: winner ranks #2
+without 5QYnNhTKsN3kE7OaqILA1U: winner ranks #1
+without 5vNRhkKd0yEAg8suGBpjeY: winner ranks #1

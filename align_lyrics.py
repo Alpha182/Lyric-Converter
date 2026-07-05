@@ -14,7 +14,7 @@ Usage:
       --spotify-id 7mykoq6R3BArsSpNDjFQTm \
       --title "Song" --artist "Artist"
 """
-import argparse, os, re, sys, subprocess, tempfile, html, wave
+import argparse, bisect, os, re, sys, subprocess, tempfile, html, wave
 
 # NB: do NOT use expandable_segments on Windows — its low-level CUDA VMM path is rejected
 # by WDDM and throws spurious OOMs (fails a 90 MB alloc with 14 GB free). Separate processes
@@ -287,6 +287,56 @@ def no_overlap(word_times, items, min_dur=0.03):
     return word_times
 
 
+def sustain_fill(word_times, items, rms, hop_s, peak, onsets, max_ext=3.5):
+    """A held word ("deeeeep") must stay lit while the voice sustains it. trim_holds
+    shortens over-long words blindly (it can't tell a pause-absorber from a real hold),
+    so after onsets are FINAL, re-extend a word's end through continuous vocal energy —
+    stopping at the next word's start, the next detected attack, or where energy dies.
+    Onsets are never moved; only ends grow, so timing stats are untouched."""
+    # a hold only yields to the next word of its OWN stream (main vs background):
+    # later choruses overlap a held "deep" with a backing counter-line, and that
+    # bg word starting mid-hold must not cut the main highlight short.
+    stream_starts = {False: [], True: []}
+    for wt, it in zip(word_times, items):
+        if wt:
+            stream_starts[bool(it[3])].append(wt[0])
+    for v in stream_starts.values():
+        v.sort()
+    thr = 0.12 * (peak or 1.0)
+    nf = rms.numel()
+    if not nf:
+        return word_times
+    for i, wt in enumerate(word_times):
+        if wt is None:
+            continue
+        s, e = wt
+        starts = stream_starts[bool(items[i][3])]
+        j = bisect.bisect_right(starts, s + 1e-6)
+        nxt = starts[j] if j < len(starts) else e + max_ext
+        limit = min(nxt - 0.08, e + max_ext)
+        if limit <= e + 0.1:
+            continue
+        # hysteresis: 0.12*peak to be "in" the note, 0.05*peak to stay in it — sung
+        # holds decay, and a vibrato dip must not read as the note ending. The walk
+        # stops at 150ms of real silence or the next word's start; no onset guard
+        # (the onset detector fires on vibrato swells mid-note and would clamp
+        # every extension to nothing).
+        f, dip, end_f = int(e / hop_s), 0, int(e / hop_s)
+        low = 0.05 * (peak or 1.0)
+        while f < nf and f * hop_s < limit:
+            if float(rms[f]) > (low if end_f > int(e / hop_s) else thr):
+                dip, end_f = 0, f
+            else:
+                dip += 1
+                if dip * hop_s > 0.15:    # energy gone for 150ms -> the note ended
+                    break
+            f += 1
+        run_end = end_f * hop_s
+        if run_end > e + 0.1:
+            word_times[i] = (s, min(run_end, limit))
+    return word_times
+
+
 # --------------------------------------------------------------- ttml emit
 def fmt(t):
     t = max(0.0, t)
@@ -377,7 +427,7 @@ def separate_stage(audio, vocals_out, device):
     except OSError: pass
 
 
-def align_stage(vocals_path, lyrics_path, out, meta, device, lead=0.12, blend=0.55):
+def align_stage(vocals_path, lyrics_path, out, meta, device, lead=0.06, blend=0.70):
     """Forced-align lyrics to a 16k vocal wav and write TTML."""
     lines, anchors = load_lines(open(lyrics_path, encoding="utf-8").read())
     flat, items = tokenize(lines)
@@ -501,7 +551,8 @@ def align_stage(vocals_path, lyrics_path, out, meta, device, lead=0.12, blend=0.
         # The truth is between them, so translate the line so its first word sits a fraction
         # BLEND of the way from MMS's onset back toward the stamp (0 = pin hard to the stamp, the
         # old behaviour that dragged whole lines ~300 ms early; 1 = trust MMS as-is). Measured
-        # against the hand-authored Blinding Lights reference, ~0.55 centres the error.
+        # against the hand-authored Blinding Lights reference, ~0.55 centred the error;
+        # the 9-song AMLL sweep (eval/sweep_results.txt) moved the optimum to 0.70.
         BLEND = blend
 
         def natural(idxs):                                # rough sung length per word, by letters
@@ -654,6 +705,7 @@ def align_stage(vocals_path, lyrics_path, out, meta, device, lead=0.12, blend=0.
         log(f"[align] moved {moved} line(s) off silence onto the vocal onset")
 
     no_overlap(word_times, items)                         # remove any word overlaps; onsets untouched
+    sustain_fill(word_times, items, rms, hop_s, peak, onsets)  # held notes stay lit through the sustain
 
     if lead:
         # Global lead: forced aligners (and hand LRC stamps) sit a touch late — MMS lands on
@@ -685,9 +737,9 @@ def main():
     ap.add_argument("--title", default="")
     ap.add_argument("--artist", default="")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
-    ap.add_argument("--lead", type=float, default=0.12,
+    ap.add_argument("--lead", type=float, default=0.06,
                     help="shift all words earlier by this many seconds to cancel the aligner's late bias")
-    ap.add_argument("--blend", type=float, default=0.55,
+    ap.add_argument("--blend", type=float, default=0.70,
                     help="0=pin line starts to the LRC stamp, 1=trust MMS onset as-is")
     args = ap.parse_args()
 
